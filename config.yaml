@@ -1,0 +1,122 @@
+- hosts: all
+  become: true
+  vars:
+    devops_public_key: ""
+  tasks:
+    - name: Set Hostname
+      hostname:
+        name: "{{ inventory_hostname }}"
+
+
+
+    - name: Create .ssh if not exist
+      file:
+        path: /home/ansadmin/.ssh
+        state: directory
+        owner: ansadmin
+        group: ansadmin
+        mode: 0700
+
+
+
+   - name: Copy Sample Inventory to ansadmin home
+      copy:
+        src: '/home/ec2-user/inventory'
+        dest: "/home/ansadmin/inventory"
+        mode: '0755'
+        owner: ansadmin
+        group: ansadmin
+      when: inventory_hostname == 'ansible-master'
+
+ - name: Copy ansible.cfg to ansadmin home
+      copy:
+        src: '/home/ec2-user/ansible.cfg'
+        dest: "/home/ansadmin/ansible.cfg"
+        mode: '0755'
+        owner: ansadmin
+        group: ansadmin
+      when: inventory_hostname == 'ansible-master'
+
+- name: Update /etc/hosts
+      lineinfile:
+        line: "{{ hostvars[item]['ansible_default_ipv4']['address'] }} {{ item }}"
+        path: /etc/hosts
+      loop: "{{ groups['all'] }}"
+
+ - name: Generate an OpenSSH keypair 2048 bits
+      openssh_keypair:
+        path: '/home/ec2-user/.ssh/id_rsa'
+        size: 2048
+        force: True
+        owner: ec2-user
+        group: ec2-user
+      delegate_to: web01
+      when: inventory_hostname == 'ansible-master'
+
+
+ - name: Copy SSH Private Key to ansadmin user
+      copy:
+        src: "/home/ec2-user/.ssh/id_rsa"
+        dest: "/home/ansadmin/.ssh/id_rsa"
+        owner: ansadmin
+        group: ansadmin
+        mode: '0600'
+        force: yes
+      when: inventory_hostname == 'ansible-master'      
+
+
+ - name: Copy SSH Public Key to ansadmin user
+      copy:
+        src: "/home/ec2-user/.ssh/id_rsa.pub"
+        dest: "/home/ansadmin/.ssh/id_rsa.pub"
+        owner: ansadmin
+        group: ansadmin
+        mode: '0644'
+        force: yes
+      when: inventory_hostname == 'ansible-master'     
+
+
+ - name: Fetch the Public Key Content
+      become: false
+      set_fact:
+        ansadmin_public_key: "{{ lookup('file', '/home/ec2-user/.ssh/id_rsa.pub') }}"
+      delegate_to: ansible-master
+      when: inventory_hostname == 'ansible-master'         
+
+
+- name: Add Ansible Engine keys to authorized_keys of nodes
+      authorized_key:
+        user: ansadmin
+        state: present
+        key: "{{ hostvars['web01']['ansadmin_public_key'] }}"
+
+
+- name: Disable password login
+      lineinfile: 
+        dest: /etc/ssh/sshd_config 
+        regexp: "^PasswordAuthentication" 
+        line: "PasswordAuthentication no" 
+        state: present
+
+
+ - name: Restart sshd
+      service:
+        name: sshd
+        state: restarted
+
+  - name: Clean up inventory in ansadmin home
+      lineinfile: 
+        dest: /home/ansadmin/inventory
+        regexp: "^ansible_ssh_extra_args"
+        state: absent
+      when: inventory_hostname == 'ansible-master'         
+
+
+
+  - name: Amend inventory in ansadmin home
+      lineinfile: 
+        dest: /home/ansadmin/inventory
+        line: "ansible_ssh_extra_args=' -o StrictHostKeyChecking=no '" 
+        state: present
+        insertafter: "ansible_connection=ssh"
+      when: inventory_hostname == 'ansible-master'
